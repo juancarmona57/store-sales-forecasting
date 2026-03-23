@@ -103,3 +103,59 @@ class TestRollingFeatures:
         result = add_rolling_features(df, target_col="sales", windows=[3])
         # Rolling mean at index 3 should be mean of [0,1,2] = 1.0 (shifted, not including current)
         assert result.loc[3, "sales_rolling_mean_3"] == pytest.approx(1.0, rel=1e-6)
+
+
+from src.features.promotion import add_promotion_features
+
+
+class TestPromotionFeatures:
+
+    def test_adds_promo_lag(self, sample_train_df):
+        result = add_promotion_features(sample_train_df)
+        assert "promo_lag_7" in result.columns
+
+    def test_adds_promo_rolling(self, sample_train_df):
+        result = add_promotion_features(sample_train_df)
+        assert "promo_rolling_14" in result.columns
+
+    def test_adds_promo_duration(self, sample_train_df):
+        result = add_promotion_features(sample_train_df)
+        assert "promo_duration" in result.columns
+        assert (result["promo_duration"] >= 0).all()
+
+
+from src.features.cross_features import add_cross_features
+
+
+class TestCrossFeatures:
+
+    def test_adds_family_store_type(self, sample_train_df):
+        df = sample_train_df.copy()
+        df["store_type"] = "A"
+        result = add_cross_features(df)
+        assert "family_x_store_type" in result.columns
+
+    def test_adds_dow_family(self, sample_train_df):
+        df = sample_train_df.copy()
+        df["day_of_week"] = df["date"].dt.dayofweek
+        result = add_cross_features(df)
+        assert "dow_x_family" in result.columns
+
+
+from src.features.aggregations import add_aggregation_features
+
+
+class TestAggregationFeatures:
+
+    def test_adds_store_family_mean(self, sample_train_df):
+        df = sample_train_df.sort_values(["store_nbr", "family", "date"])
+        result = add_aggregation_features(df)
+        assert "sales_store_family_mean_30" in result.columns
+
+    def test_no_future_leak(self, sample_train_df):
+        """Aggregations use expanding window, no future data."""
+        df = sample_train_df.sort_values(["store_nbr", "family", "date"])
+        result = add_aggregation_features(df)
+        # First row per group should have NaN (no history)
+        first_rows = result.groupby(["store_nbr", "family"]).head(1)
+        assert first_rows["sales_store_family_mean_30"].isna().all()
