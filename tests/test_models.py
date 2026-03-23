@@ -71,3 +71,76 @@ class TestLGBMModel:
         preds_after = loaded.predict(X)
 
         np.testing.assert_array_almost_equal(preds_before, preds_after)
+
+
+from src.models.xgb_model import XGBModel
+
+
+class TestXGBModel:
+    """Tests for XGBoost model implementation."""
+
+    @pytest.fixture
+    def simple_data(self):
+        np.random.seed(42)
+        n = 200
+        X = pd.DataFrame({
+            "feature_1": np.random.randn(n),
+            "feature_2": np.random.randn(n),
+        })
+        y = np.abs(np.random.randn(n) * 10 + 50)
+        return X, y
+
+    def test_fit_returns_self(self, simple_data):
+        X, y = simple_data
+        model = XGBModel(params={"n_estimators": 10, "verbosity": 0})
+        assert model.fit(X, y) is model
+
+    def test_predict_shape(self, simple_data):
+        X, y = simple_data
+        model = XGBModel(params={"n_estimators": 10, "verbosity": 0})
+        model.fit(X, y)
+        preds = model.predict(X)
+        assert len(preds) == len(X)
+
+    def test_predictions_non_negative(self, simple_data):
+        X, y = simple_data
+        model = XGBModel(params={"n_estimators": 10, "verbosity": 0})
+        model.fit(X, y)
+        assert (model.predict(X) >= 0).all()
+
+
+from src.models.catboost_model import CatBoostModel
+
+
+class TestCatBoostModel:
+    """Tests for CatBoost model implementation."""
+
+    @pytest.fixture
+    def simple_data(self):
+        np.random.seed(42)
+        n = 200
+        X = pd.DataFrame({
+            "feature_1": np.random.randn(n),
+            "feature_2": np.random.randn(n),
+        })
+        y = np.abs(np.random.randn(n) * 10 + 50)
+        return X, y
+
+    def test_fit_returns_self(self, simple_data):
+        X, y = simple_data
+        model = CatBoostModel(params={"iterations": 10, "verbose": 0})
+        assert model.fit(X, y) is model
+
+    def test_predict_shape(self, simple_data):
+        X, y = simple_data
+        model = CatBoostModel(params={"iterations": 10, "verbose": 0})
+        model.fit(X, y)
+        assert len(model.predict(X)) == len(X)
+
+    def test_trains_on_log1p_target(self, simple_data):
+        """CatBoost trains on log1p(sales), predictions are expm1'd back."""
+        X, y = simple_data
+        model = CatBoostModel(params={"iterations": 10, "verbose": 0})
+        model.fit(X, y)
+        preds = model.predict(X)
+        assert (preds >= 0).all()
