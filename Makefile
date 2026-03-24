@@ -22,15 +22,13 @@ download-data:
 	python -c "import zipfile; zipfile.ZipFile('data/raw/store-sales-time-series-forecasting.zip').extractall('data/raw/')"
 
 train:
-	python -m src.models.lgbm_model
-	python -m src.models.xgb_model
-	python -m src.models.catboost_model
-
-ensemble:
-	python -m src.models.ensemble
+	python -m src.pipeline --train
 
 submit:
-	python -m src.submission.generator
+	python -m src.pipeline --submit
+
+pipeline:
+	python -m src.pipeline
 
 clean:
 	python -c "import pathlib, shutil; [shutil.rmtree(p) for p in pathlib.Path('.').rglob('__pycache__')]"

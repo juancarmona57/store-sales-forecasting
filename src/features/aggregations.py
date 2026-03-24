@@ -32,11 +32,11 @@ def add_aggregation_features(
     for window in windows:
         grouped_rolling = shifted.groupby(group_key)
         df[f"{target_col}_store_family_mean_{window}"] = (
-            grouped_rolling.rolling(window=window, min_periods=window).mean()
+            grouped_rolling.rolling(window=window, min_periods=1).mean()
             .reset_index(level=0, drop=True)
         )
         df[f"{target_col}_store_family_std_{window}"] = (
-            grouped_rolling.rolling(window=window, min_periods=window).std()
+            grouped_rolling.rolling(window=window, min_periods=1).std()
             .reset_index(level=0, drop=True)
         )
 

@@ -20,10 +20,11 @@ TRANSACTIONS_FILE = RAW_DIR / "transactions.csv"
 SAMPLE_SUBMISSION_FILE = RAW_DIR / "sample_submission.csv"
 
 # --- Feature Engineering ---
-# Safe lags: all >= 16 to ensure availability during 16-day test horizon
-LAG_DAYS = [16, 21, 28, 35, 42]
+# Safe lags only: all >= 16 to guarantee availability for 16-day test horizon
+# No iterative prediction needed — avoids error accumulation
+LAG_DAYS = [16, 17, 21, 28, 35, 42]
 ROLLING_WINDOWS = [7, 14, 28]
-SAFE_SHIFT = 16  # Minimum shift to prevent leakage into 16-day forecast horizon
+SAFE_SHIFT = 16  # shift >= 16 ensures rolling features use only known data
 CATEGORICAL_COLS = ["family", "store_type", "cluster", "city", "state"]
 TARGET_COL = "sales"
 DATE_COL = "date"
@@ -35,7 +36,8 @@ HOLDOUT_DAYS = 16
 
 # --- Model Defaults ---
 LGBM_PARAMS = {
-    "objective": "rmse",
+    "objective": "tweedie",
+    "tweedie_variance_power": 1.5,
     "metric": "rmse",
     "learning_rate": 0.03,
     "num_leaves": 255,
@@ -48,7 +50,7 @@ LGBM_PARAMS = {
 }
 
 XGB_PARAMS = {
-    "objective": "reg:squarederror",
+    "objective": "reg:squaredlogerror",
     "learning_rate": 0.03,
     "max_depth": 8,
     "subsample": 0.8,

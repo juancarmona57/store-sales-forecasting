@@ -20,6 +20,10 @@ from src.features.target_stats import apply_target_stats
 from src.config import RAW_DIR, TARGET_COL, CATEGORICAL_COLS
 
 
+# Module-level storage for category mappings (set during training, reused at inference)
+_category_mappings: dict = {}
+
+
 def build_features(
     df: pd.DataFrame,
     holidays_df: Optional[pd.DataFrame] = None,
@@ -31,16 +35,18 @@ def build_features(
     Args:
         df: Merged DataFrame (with store, oil, transaction columns).
         holidays_df: Holidays DataFrame. If None, loads from config path.
-        is_train: If True, generates lag/rolling/agg features from target.
+        is_train: If True, saves category mappings for later use.
         target_stats: Pre-computed target stats dict. If provided, applied as features.
 
     Returns:
         Feature-enriched DataFrame.
     """
+    global _category_mappings
+
     # 1. Temporal features
     df = add_temporal_features(df)
 
-    # 2. Lag and rolling features (safe lags >= 16, shift >= 16)
+    # 2. Lag and rolling features
     if TARGET_COL in df.columns:
         df = df.sort_values(["store_nbr", "family", "date"]).reset_index(drop=True)
         df = add_lag_features(df)
@@ -69,18 +75,38 @@ def build_features(
     # 7. Cross features
     df = add_cross_features(df)
 
-    # 8. Aggregation features (uses safe shift)
+    # 8. Aggregation features
     if TARGET_COL in df.columns:
         df = add_aggregation_features(df)
 
-    # 9. Target statistics (static lookup features - always available)
+    # 9. Target statistics
     if target_stats is not None:
         df = apply_target_stats(df, target_stats)
 
-    # 10. Encode categoricals
-    for col in CATEGORICAL_COLS:
-        if col in df.columns:
-            df[col] = df[col].astype("category")
+    # 10. Encode categoricals with CONSISTENT mappings
+    all_cat_cols = list(CATEGORICAL_COLS)
+    # Also include cross-feature categoricals
+    for col in df.columns:
+        if col.endswith("_x_store_type") or col.endswith("_x_cluster") or col.startswith("dow_x_"):
+            if col not in all_cat_cols:
+                all_cat_cols.append(col)
+
+    if is_train:
+        # Save category mappings from training data
+        for col in all_cat_cols:
+            if col in df.columns:
+                cat = df[col].astype("category")
+                _category_mappings[col] = cat.cat.categories
+                df[col] = cat
+    else:
+        # Reuse saved category mappings for consistent encoding
+        for col in all_cat_cols:
+            if col in df.columns:
+                if col in _category_mappings:
+                    cat_type = pd.CategoricalDtype(categories=_category_mappings[col])
+                    df[col] = df[col].astype(cat_type)
+                else:
+                    df[col] = df[col].astype("category")
 
     # 11. Payday feature
     df["is_payday"] = ((df["date"].dt.day == 15) | (df["date"].dt.is_month_end)).astype(int)
@@ -94,6 +120,9 @@ def build_features(
 
 
 def get_feature_columns(df: pd.DataFrame) -> list:
-    """Get list of feature column names (excluding target, id, date)."""
+    """Get list of feature column names (excluding target, id, date).
+
+    Transactions are now included since NaN values are imputed for test rows.
+    """
     exclude = {"id", "date", TARGET_COL}
     return [c for c in df.columns if c not in exclude]

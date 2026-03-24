@@ -100,6 +100,19 @@ def add_transaction_features(df: pd.DataFrame) -> pd.DataFrame:
     if "transactions" not in df.columns:
         return df
 
+    # Impute NaN transactions with per-store mean from last 28 available days
+    if df["transactions"].isna().any():
+        store_means = (
+            df.dropna(subset=["transactions"])
+            .groupby("store_nbr")["transactions"]
+            .apply(lambda x: x.tail(28).mean())
+        )
+        df["transactions"] = df.apply(
+            lambda row: store_means.get(row["store_nbr"], 0)
+            if pd.isna(row["transactions"]) else row["transactions"],
+            axis=1,
+        )
+
     grouped = df.groupby("store_nbr", observed=True)["transactions"]
 
     df["transactions_lag_7"] = grouped.shift(7)

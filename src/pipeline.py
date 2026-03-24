@@ -1,7 +1,7 @@
 """Full training and submission pipeline.
 
-Orchestrates data loading, feature engineering, model training,
-ensemble creation, and submission generation.
+Uses safe lags (>=16) that are always available during the 16-day test horizon.
+No iterative prediction needed — avoids error accumulation.
 """
 
 import argparse
@@ -13,10 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.config import (
-    MODELS_DIR, SUBMISSIONS_DIR, TARGET_COL,
-    ENSEMBLE_WEIGHTS, SEED,
-)
+from src.config import MODELS_DIR, SUBMISSIONS_DIR, TARGET_COL, SEED
 from src.data.loader import load_raw_data
 from src.data.preprocessor import preprocess_train
 from src.features.builder import build_features, get_feature_columns
@@ -25,7 +22,6 @@ from src.evaluation.metrics import rmsle
 from src.evaluation.validation import TimeSeriesSplitWithGap
 from src.models.lgbm_model import LGBMModel
 from src.models.xgb_model import XGBModel
-from src.models.catboost_model import CatBoostModel
 from src.models.ensemble import weighted_average_ensemble, optimize_weights
 from src.submission.generator import generate_submission
 
@@ -37,54 +33,49 @@ logger = logging.getLogger(__name__)
 
 
 def load_and_prepare_data():
-    """Load raw data, preprocess, and build features."""
+    """Load, preprocess, build features on combined train+test."""
     logger.info("Loading raw data...")
     train_df, test_df = load_raw_data()
     train_df = preprocess_train(train_df)
 
-    # Compute target statistics BEFORE building features (from clean train data)
     logger.info("Computing target statistics...")
     target_stats = compute_target_stats(train_df)
 
-    # For proper lag computation, concatenate train + test
-    # Test rows have no sales - they'll get lag features from train history
+    # Prepare test rows
     test_df["sales"] = np.nan
     if "transactions" not in test_df.columns:
         test_df["transactions"] = np.nan
 
+    # Combine train + test for proper lag computation
+    # With safe lags (>=16), test rows get lags from training data directly
     combined = pd.concat([train_df, test_df], ignore_index=True)
     combined = combined.sort_values(["store_nbr", "family", "date"]).reset_index(drop=True)
 
     logger.info("Building features on combined data (%d rows)...", len(combined))
     combined_featured = build_features(combined, is_train=True, target_stats=target_stats)
 
-    # Split back into train and test
-    train_mask = combined_featured["date"] <= train_df["date"].max()
-    test_mask = combined_featured["date"] > train_df["date"].max()
+    # Split back
+    train_max_date = train_df["date"].max()
+    train_featured = combined_featured[combined_featured["date"] <= train_max_date].copy()
+    test_featured = combined_featured[combined_featured["date"] > train_max_date].copy()
 
-    train_featured = combined_featured[train_mask].copy()
-    test_featured = combined_featured[test_mask].copy()
-
-    # Drop rows with NaN in target (from early rows lacking lag history)
-    train_featured = train_featured.dropna(subset=[TARGET_COL])
+    train_featured = train_featured.dropna(subset=[TARGET_COL]).reset_index(drop=True)
+    test_featured = test_featured.reset_index(drop=True)
 
     feature_cols = get_feature_columns(train_featured)
-    logger.info("Features: %d train rows x %d cols", len(train_featured), len(feature_cols))
+    logger.info("Features: %d train rows, %d test rows, %d cols",
+                len(train_featured), len(test_featured), len(feature_cols))
 
-    # Check NaN counts in features
-    nan_counts = train_featured[feature_cols].isna().sum()
-    if nan_counts.any():
-        logger.info("NaN in features (filling with 0):")
-        for col in nan_counts[nan_counts > 0].index[:10]:
-            logger.info("  %s: %d NaN", col, nan_counts[col])
-    train_featured[feature_cols] = train_featured[feature_cols].fillna(0)
-    test_featured[feature_cols] = test_featured[feature_cols].fillna(0)
+    # Fill NaN in numeric features
+    numeric_feat = [c for c in feature_cols if train_featured[c].dtype.name != "category"]
+    train_featured[numeric_feat] = train_featured[numeric_feat].fillna(0)
+    test_featured[numeric_feat] = test_featured[numeric_feat].fillna(0)
 
     return train_featured, test_featured, feature_cols, target_stats
 
 
 def train_models(train_df, feature_cols):
-    """Train all three models with time-series validation."""
+    """Train LightGBM and XGBoost."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     splitter = TimeSeriesSplitWithGap()
@@ -127,46 +118,28 @@ def train_models(train_df, feature_cols):
     val_predictions.append(xgb_preds)
     logger.info("XGBoost RMSLE: %.6f (%.1fs)", xgb_score, time.time() - t0)
 
-    # CatBoost
-    logger.info("Training CatBoost...")
-    t0 = time.time()
-    cb_model = CatBoostModel()
-    cb_model.fit(X_train, y_train, X_val, y_val)
-    cb_preds = cb_model.predict(X_val)
-    cb_score = rmsle(y_val, cb_preds)
-    cb_model.save(MODELS_DIR / "catboost_model.cbm")
-    models["catboost"] = cb_model
-    scores["catboost"] = cb_score
-    val_predictions.append(cb_preds)
-    logger.info("CatBoost RMSLE: %.6f (%.1fs)", cb_score, time.time() - t0)
-
-    # Optimize ensemble weights
+    # Optimize ensemble
     logger.info("Optimizing ensemble weights...")
     opt_weights = optimize_weights(val_predictions, y_val)
     ensemble_preds = weighted_average_ensemble(val_predictions, opt_weights)
     ensemble_score = rmsle(y_val, ensemble_preds)
     scores["ensemble"] = ensemble_score
 
-    # Save weights
     weights_path = MODELS_DIR / "weights.json"
     with open(weights_path, "w") as f:
         json.dump({"weights": opt_weights, "scores": scores}, f, indent=2)
 
     logger.info("=" * 60)
-    logger.info("MODEL COMPARISON (Hold-out RMSLE)")
-    logger.info("=" * 60)
     for name, score in scores.items():
         marker = " <-- BEST" if score == min(scores.values()) else ""
         logger.info("  %-12s: %.6f%s", name, score, marker)
-    logger.info("Weights: lgbm=%.3f, xgb=%.3f, catboost=%.3f",
-                opt_weights[0], opt_weights[1], opt_weights[2])
     logger.info("=" * 60)
 
     return models, opt_weights
 
 
 def generate_test_submission(models, weights, test_featured, feature_cols):
-    """Generate submission from trained models and pre-computed test features."""
+    """Generate submission from pre-computed test features."""
     SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
     for col in feature_cols:
@@ -174,51 +147,39 @@ def generate_test_submission(models, weights, test_featured, feature_cols):
             test_featured[col] = 0
 
     X_test = test_featured[feature_cols]
-    logger.info("Test features: %d rows x %d cols", len(X_test), len(feature_cols))
+    numeric_feat = [c for c in feature_cols if X_test[c].dtype.name != "category"]
+    X_test[numeric_feat] = X_test[numeric_feat].fillna(0)
 
-    # Check for NaN
-    nan_test = X_test.isna().sum()
-    if nan_test.any():
-        logger.info("NaN in test features (filling with 0):")
-        for col in nan_test[nan_test > 0].index[:10]:
-            logger.info("  %s: %d", col, nan_test[col])
-        X_test = X_test.fillna(0)
-
-    # Generate predictions
+    logger.info("Generating predictions (%d rows)...", len(X_test))
     predictions = []
-    for name in ["lgbm", "xgb", "catboost"]:
+    for name in models:
         preds = models[name].predict(X_test)
         predictions.append(preds)
-        logger.info("  %s: mean=%.2f, median=%.2f, std=%.2f",
-                     name, preds.mean(), np.median(preds), preds.std())
+        logger.info("  %s: mean=%.1f, median=%.1f", name, preds.mean(), np.median(preds))
 
-    # Ensemble
     ensemble_preds = weighted_average_ensemble(predictions, weights)
-    logger.info("Ensemble: mean=%.2f, median=%.2f", ensemble_preds.mean(), np.median(ensemble_preds))
+    logger.info("Ensemble: mean=%.1f, median=%.1f", ensemble_preds.mean(), np.median(ensemble_preds))
 
-    # Generate submission - need to match test IDs
-    save_path = SUBMISSIONS_DIR / "submission_v8.csv"
+    save_path = SUBMISSIONS_DIR / "submission_v10.csv"
     submission = generate_submission(test_featured, ensemble_preds, save_path=save_path)
     logger.info("Submission saved: %s (%d rows)", save_path, len(submission))
-
     return submission
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Store Sales Forecasting Pipeline")
-    parser.add_argument("--train", action="store_true", help="Train models only")
-    parser.add_argument("--submit", action="store_true", help="Generate submission only")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train", action="store_true")
+    parser.add_argument("--submit", action="store_true")
     args = parser.parse_args()
 
     if not args.train and not args.submit:
         args.train = True
         args.submit = True
 
-    train_featured, test_featured, feature_cols, target_stats = load_and_prepare_data()
+    train_featured, test_featured, feature_cols, _ = load_and_prepare_data()
 
     if args.train:
         models, weights = train_models(train_featured, feature_cols)
-
         if args.submit:
             generate_test_submission(models, weights, test_featured, feature_cols)
 
