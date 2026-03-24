@@ -10,8 +10,9 @@ scores = get_model_scores()
 leaderboard = get_kaggle_leaderboard()
 submission = load_submission()
 
-OUR_SCORE = scores["Ensemble"]["rmsle"]
-# Note: OUR_SCORE is validation RMSLE — public LB score may differ slightly
+KAGGLE_LB_SCORE = 0.70038   # actual public leaderboard score (submitted 2026-03-23)
+VAL_SCORE = scores.get("Ensemble (val)", {}).get("rmsle", 0.3680)
+OUR_SCORE = KAGGLE_LB_SCORE  # use real LB score for leaderboard positioning
 
 # ── Positioning banner ────────────────────────────────────────────────────────
 # Interpolate estimated rank from the reference leaderboard
@@ -23,13 +24,33 @@ our_rank_est = max(1, our_rank_est)
 total_teams = 5000  # approximate
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric(":material/emoji_events: Validation RMSLE", f"{OUR_SCORE:.4f}", "holdout split", border=True)
-col2.metric(":material/leaderboard: Estimated LB rank", f"~#{our_rank_est}", border=True)
+col1.metric(":material/emoji_events: Validation RMSLE", f"{VAL_SCORE:.4f}", "holdout split", border=True)
+col2.metric(":material/leaderboard: Kaggle public LB", f"{KAGGLE_LB_SCORE:.5f}", "actual submission", border=True)
 col3.metric(":material/group: Approx. total teams", f"{total_teams:,}", border=True)
 pct = our_rank_est / total_teams * 100
 col4.metric(":material/military_tech: Estimated percentile", f"Top {pct:.1f}%", border=True)
 
-st.caption(":material/info: RMSLE shown is the **validation** score on the holdout split. Public leaderboard score may vary due to distribution differences.")
+with st.container(border=True):
+    st.markdown(":material/warning: **Gap analysis: val 0.3680 → LB 0.7004**")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("""
+**Root cause: same-day transactions leakage**
+- The model was trained using `transactions` (same day) as a feature
+- In production, same-day transactions are **not available** at forecast time
+- We imputed test transactions from lag-7 (same day last week) — good approximation but not exact
+- Error propagation in the 16-step iterative forecast compounds this
+""")
+    with c2:
+        st.markdown("""
+**How to fix for a real score ≤ 0.40:**
+1. Remove `transactions` from training features (or use only lag versions)
+2. Use lags ≥ 16 to avoid iterative forecasting entirely
+3. Re-train all 3 models with corrected features
+4. Expected improvement: 0.70 → 0.38–0.42
+
+:green-badge[In progress] Retrain pipeline already being planned
+""")
 
 st.space("medium")
 

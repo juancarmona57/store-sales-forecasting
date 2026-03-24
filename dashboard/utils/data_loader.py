@@ -75,7 +75,8 @@ def get_model_scores():
         "LightGBM": {"rmsle": 0.3745, "weight": 0.368, "color": "#4C8BF5"},
         "XGBoost": {"rmsle": 0.6655, "weight": 0.003, "color": "#FF7043"},
         "CatBoost": {"rmsle": 0.3820, "weight": 0.629, "color": "#66BB6A"},
-        "Ensemble": {"rmsle": 0.3680, "weight": 1.0, "color": "#AB47BC"},
+        "Ensemble (val)": {"rmsle": 0.3680, "weight": 1.0, "color": "#AB47BC"},
+        "Ensemble (Kaggle LB)": {"rmsle": 0.70038, "weight": 1.0, "color": "#EF5350"},
     }
 
 
