@@ -20,8 +20,10 @@ TRANSACTIONS_FILE = RAW_DIR / "transactions.csv"
 SAMPLE_SUBMISSION_FILE = RAW_DIR / "sample_submission.csv"
 
 # --- Feature Engineering ---
-LAG_DAYS = [1, 7, 14, 28]
-ROLLING_WINDOWS = [7, 14, 28, 90]
+# Safe lags: all >= 16 to ensure availability during 16-day test horizon
+LAG_DAYS = [16, 21, 28, 35, 42]
+ROLLING_WINDOWS = [7, 14, 28]
+SAFE_SHIFT = 16  # Minimum shift to prevent leakage into 16-day forecast horizon
 CATEGORICAL_COLS = ["family", "store_type", "cluster", "city", "state"]
 TARGET_COL = "sales"
 DATE_COL = "date"
@@ -33,35 +35,34 @@ HOLDOUT_DAYS = 16
 
 # --- Model Defaults ---
 LGBM_PARAMS = {
-    "objective": "tweedie",
-    "tweedie_variance_power": 1.5,
+    "objective": "rmse",
     "metric": "rmse",
-    "learning_rate": 0.05,
-    "num_leaves": 127,
-    "min_child_samples": 20,
+    "learning_rate": 0.03,
+    "num_leaves": 255,
+    "min_child_samples": 50,
     "feature_fraction": 0.8,
     "bagging_fraction": 0.8,
     "bagging_freq": 1,
-    "n_estimators": 2000,
+    "n_estimators": 3000,
     "verbose": -1,
 }
 
 XGB_PARAMS = {
-    "objective": "reg:squaredlogerror",
-    "learning_rate": 0.05,
+    "objective": "reg:squarederror",
+    "learning_rate": 0.03,
     "max_depth": 8,
     "subsample": 0.8,
     "colsample_bytree": 0.8,
-    "n_estimators": 2000,
+    "n_estimators": 3000,
     "verbosity": 0,
 }
 
 CATBOOST_PARAMS = {
     "loss_function": "RMSE",
-    "learning_rate": 0.05,
+    "learning_rate": 0.03,
     "depth": 8,
-    "iterations": 2000,
-    "verbose": 0,
+    "iterations": 3000,
+    "verbose": 100,
 }
 
 # --- Ensemble ---

@@ -1,4 +1,4 @@
-"""LightGBM model with Tweedie objective for sales forecasting."""
+"""LightGBM model with RMSE on log1p-transformed target."""
 
 import logging
 from pathlib import Path
@@ -15,25 +15,28 @@ logger = logging.getLogger(__name__)
 
 
 class LGBMModel(BaseModel):
-    """LightGBM model with Tweedie objective."""
+    """LightGBM model training on log1p(target)."""
 
     def __init__(self, params: Optional[Dict[str, Any]] = None):
         merged_params = {**LGBM_PARAMS, **(params or {})}
-        super().__init__(name="lgbm_tweedie", params=merged_params)
+        super().__init__(name="lgbm_log1p", params=merged_params)
 
     def fit(self, X_train: pd.DataFrame, y_train: np.ndarray,
             X_val: Optional[pd.DataFrame] = None, y_val: Optional[np.ndarray] = None) -> "LGBMModel":
         self.feature_names = list(X_train.columns)
 
-        callbacks = [lgb.log_evaluation(period=100)]
+        y_log = np.log1p(np.clip(y_train, 0, None))
+
+        callbacks = [lgb.log_evaluation(period=200)]
         if X_val is not None and y_val is not None:
-            callbacks.append(lgb.early_stopping(stopping_rounds=50))
-            eval_set = [(X_val, y_val)]
+            y_val_log = np.log1p(np.clip(y_val, 0, None))
+            callbacks.append(lgb.early_stopping(stopping_rounds=100))
+            eval_set = [(X_val, y_val_log)]
         else:
             eval_set = None
 
         self.model = lgb.LGBMRegressor(**self.params, random_state=SEED)
-        self.model.fit(X_train, y_train, eval_set=eval_set, callbacks=callbacks)
+        self.model.fit(X_train, y_log, eval_set=eval_set, callbacks=callbacks)
 
         logger.info("LightGBM trained. Best iteration: %s",
                      getattr(self.model, "best_iteration_", self.params.get("n_estimators")))
@@ -43,10 +46,10 @@ class LGBMModel(BaseModel):
         if self.model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
         if isinstance(self.model, lgb.Booster):
-            preds = self.model.predict(X)
+            preds_log = self.model.predict(X)
         else:
-            preds = self.model.predict(X)
-        return np.clip(preds, 0, None)
+            preds_log = self.model.predict(X)
+        return np.clip(np.expm1(preds_log), 0, None)
 
     def save(self, path: Path) -> None:
         if self.model is None:

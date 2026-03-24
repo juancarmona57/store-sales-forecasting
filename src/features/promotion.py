@@ -1,7 +1,4 @@
-"""Promotion feature engineering.
-
-Creates lag, rolling, and duration features for the onpromotion column.
-"""
+"""Promotion feature engineering."""
 
 import pandas as pd
 from typing import List
@@ -11,15 +8,7 @@ def add_promotion_features(
     df: pd.DataFrame,
     group_cols: List[str] | None = None,
 ) -> pd.DataFrame:
-    """Add promotion-related features.
-
-    Args:
-        df: DataFrame with onpromotion column.
-        group_cols: Columns to group by. Defaults to ["store_nbr", "family"].
-
-    Returns:
-        DataFrame with promotion features added.
-    """
+    """Add promotion-related features with safe shifts."""
     df = df.copy()
     group_cols = group_cols or ["store_nbr", "family"]
 
@@ -28,11 +17,11 @@ def add_promotion_features(
 
     grouped = df.groupby(group_cols, observed=True)["onpromotion"]
 
-    # Lag features
+    # Safe lag features (>= 16) - but promo is known for test, so we also keep current
     df["promo_lag_7"] = grouped.shift(7)
     df["promo_lag_14"] = grouped.shift(14)
 
-    # Rolling promo frequency
+    # Rolling promo frequency (shift 1 is OK for promo since it's known for test)
     shifted = grouped.shift(1)
     df["promo_rolling_14"] = (
         shifted.groupby(df[group_cols].apply(tuple, axis=1))
@@ -41,7 +30,7 @@ def add_promotion_features(
         .reset_index(level=0, drop=True)
     )
 
-    # Consecutive promo days (duration)
+    # Consecutive promo days
     def _consecutive_promo(series):
         result = []
         count = 0

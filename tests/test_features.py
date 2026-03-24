@@ -93,16 +93,21 @@ class TestRollingFeatures:
         assert "sales_rolling_std_7" in result.columns
 
     def test_rolling_no_future_leak(self):
-        """Rolling window does not include the current row."""
+        """Rolling window uses SAFE_SHIFT (16) so no data leaks from forecast horizon."""
+        # Need at least SAFE_SHIFT + window rows for non-NaN rolling values
+        n = 30
         df = pd.DataFrame({
-            "date": pd.date_range("2017-01-01", periods=10),
-            "store_nbr": [1] * 10,
-            "family": ["A"] * 10,
-            "sales": [float(i) for i in range(10)],
+            "date": pd.date_range("2017-01-01", periods=n),
+            "store_nbr": [1] * n,
+            "family": ["A"] * n,
+            "sales": [float(i) for i in range(n)],
         })
         result = add_rolling_features(df, target_col="sales", windows=[3])
-        # Rolling mean at index 3 should be mean of [0,1,2] = 1.0 (shifted, not including current)
-        assert result.loc[3, "sales_rolling_mean_3"] == pytest.approx(1.0, rel=1e-6)
+        # With SAFE_SHIFT=16, index 18 rolling_mean_3 = mean of shifted values at 16,17,18
+        # shifted by 16: values at idx 0,1,2 = mean(0,1,2) = 1.0
+        assert result.loc[18, "sales_rolling_mean_3"] == pytest.approx(1.0, rel=1e-6)
+        # First 16 rows should be NaN (no data available after shift)
+        assert pd.isna(result.loc[0, "sales_rolling_mean_3"])
 
 
 from src.features.promotion import add_promotion_features
@@ -153,9 +158,10 @@ class TestAggregationFeatures:
         assert "sales_store_family_mean_30" in result.columns
 
     def test_no_future_leak(self, sample_train_df):
-        """Aggregations use expanding window, no future data."""
+        """Aggregations use SAFE_SHIFT, so early rows per group have NaN."""
         df = sample_train_df.sort_values(["store_nbr", "family", "date"])
         result = add_aggregation_features(df)
-        # First row per group should have NaN (no history)
+        # First SAFE_SHIFT rows per group should have NaN (no history after shift)
         first_rows = result.groupby(["store_nbr", "family"]).head(1)
         assert first_rows["sales_store_family_mean_30"].isna().all()
+        assert first_rows["sales_expanding_mean"].isna().all()

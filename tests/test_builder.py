@@ -21,7 +21,7 @@ def test_build_features_adds_lags_for_train(sample_train_df, sample_stores_df, s
     merged = sample_train_df.merge(sample_stores_df.rename(columns={"type": "store_type"}), on="store_nbr", how="left")
     merged = merged.merge(sample_oil_df, on="date", how="left")
     result = build_features(merged, holidays_df=sample_holidays_df, is_train=True)
-    assert "sales_lag_7" in result.columns
+    assert "sales_lag_16" in result.columns
 
 
 def test_build_features_skips_lags_for_test(sample_test_df, sample_stores_df, sample_oil_df, sample_holidays_df):
@@ -29,7 +29,7 @@ def test_build_features_skips_lags_for_test(sample_test_df, sample_stores_df, sa
     merged = sample_test_df.merge(sample_stores_df.rename(columns={"type": "store_type"}), on="store_nbr", how="left")
     merged = merged.merge(sample_oil_df, on="date", how="left")
     result = build_features(merged, holidays_df=sample_holidays_df, is_train=False)
-    assert "sales_lag_7" not in result.columns
+    assert "sales_lag_16" not in result.columns
 
 
 def test_get_feature_columns_excludes_target(sample_train_df, sample_stores_df, sample_oil_df, sample_holidays_df):
