@@ -47,4 +47,14 @@ def add_temporal_features(df: pd.DataFrame, date_col: str = "date") -> pd.DataFr
     df["month_sin"] = np.sin(2 * np.pi * (df["month"] - 1) / 12)
     df["month_cos"] = np.cos(2 * np.pi * (df["month"] - 1) / 12)
 
+    # Fourier features for capturing periodic seasonality
+    for k in [1, 2, 3]:
+        df[f"fourier_week_sin_{k}"] = np.sin(2 * np.pi * k * df["day_of_week"] / 7)
+        df[f"fourier_week_cos_{k}"] = np.cos(2 * np.pi * k * df["day_of_week"] / 7)
+        df[f"fourier_year_sin_{k}"] = np.sin(2 * np.pi * k * df["day_of_year"] / 365.25)
+        df[f"fourier_year_cos_{k}"] = np.cos(2 * np.pi * k * df["day_of_year"] / 365.25)
+
+    # Week of month (captures pay cycles)
+    df["week_of_month"] = (df["day"] - 1) // 7 + 1
+
     return df

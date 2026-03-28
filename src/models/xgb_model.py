@@ -26,13 +26,15 @@ class XGBModel(BaseModel):
         self.feature_names = list(X_train.columns)
         y_train = np.clip(y_train, 0, None)
 
-        self.model = xgb.XGBRegressor(**self.params, random_state=SEED, enable_categorical=True)
-
         eval_set = []
         if X_val is not None and y_val is not None:
             y_val = np.clip(y_val, 0, None)
             eval_set = [(X_val, y_val)]
 
+        self.model = xgb.XGBRegressor(
+            **self.params, random_state=SEED, enable_categorical=True,
+            early_stopping_rounds=100 if eval_set else None,
+        )
         self.model.fit(X_train, y_train, eval_set=eval_set if eval_set else None, verbose=False)
 
         best_iter = getattr(self.model, "best_iteration", self.params.get("n_estimators"))

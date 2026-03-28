@@ -22,7 +22,7 @@ SAMPLE_SUBMISSION_FILE = RAW_DIR / "sample_submission.csv"
 # --- Feature Engineering ---
 # Safe lags only: all >= 16 to guarantee availability for 16-day test horizon
 # No iterative prediction needed — avoids error accumulation
-LAG_DAYS = [16, 17, 21, 28, 35, 42]
+LAG_DAYS = [16, 17, 21, 28, 35, 42, 56, 91, 182, 364]
 ROLLING_WINDOWS = [7, 14, 28]
 SAFE_SHIFT = 16  # shift >= 16 ensures rolling features use only known data
 CATEGORICAL_COLS = ["family", "store_type", "cluster", "city", "state"]
@@ -39,13 +39,16 @@ LGBM_PARAMS = {
     "objective": "tweedie",
     "tweedie_variance_power": 1.5,
     "metric": "rmse",
-    "learning_rate": 0.03,
-    "num_leaves": 255,
-    "min_child_samples": 50,
-    "feature_fraction": 0.8,
-    "bagging_fraction": 0.8,
+    "learning_rate": 0.01,
+    "num_leaves": 512,
+    "min_child_samples": 30,
+    "feature_fraction": 0.7,
+    "bagging_fraction": 0.7,
     "bagging_freq": 1,
-    "n_estimators": 3000,
+    "n_estimators": 5000,
+    "reg_alpha": 0.1,
+    "reg_lambda": 0.1,
+    "max_bin": 511,
     "verbose": -1,
 }
 
@@ -61,10 +64,12 @@ XGB_PARAMS = {
 
 CATBOOST_PARAMS = {
     "loss_function": "RMSE",
-    "learning_rate": 0.03,
-    "depth": 8,
-    "iterations": 3000,
-    "verbose": 100,
+    "learning_rate": 0.05,
+    "depth": 6,
+    "iterations": 1500,
+    "verbose": 200,
+    "l2_leaf_reg": 3,
+    "border_count": 128,
 }
 
 # --- Ensemble ---

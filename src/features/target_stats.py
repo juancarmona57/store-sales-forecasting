@@ -57,6 +57,26 @@ def compute_target_stats(train_df: pd.DataFrame, target_col: str = "sales") -> d
     sd.columns = ["store_nbr", "_dow", "store_dow_mean"]
     stats["store_dow"] = sd
 
+    # Store x Family recent mean (last 90 days) — more relevant than all-time mean
+    recent = train_df[train_df["date"] >= train_df["date"].max() - pd.Timedelta(days=90)]
+    sf_recent = recent.groupby(["store_nbr", "family"])[target_col].agg(
+        ["mean", "std"]
+    ).reset_index()
+    sf_recent.columns = ["store_nbr", "family", "sf_recent_mean", "sf_recent_std"]
+    stats["store_family_recent"] = sf_recent
+
+    # Store x Family x DayOfWeek recent mean (last 90 days)
+    recent["_dow"] = recent["date"].dt.dayofweek
+    sfd_recent = recent.groupby(["store_nbr", "family", "_dow"])[target_col].mean().reset_index()
+    sfd_recent.columns = ["store_nbr", "family", "_dow", "sf_dow_recent_mean"]
+    stats["store_family_dow_recent"] = sfd_recent
+
+    # Cluster x Family mean
+    if "cluster" in train_df.columns:
+        cf = train_df.groupby(["cluster", "family"])[target_col].agg(["mean", "std"]).reset_index()
+        cf.columns = ["cluster", "family", "cluster_family_mean", "cluster_family_std"]
+        stats["cluster_family"] = cf
+
     return stats
 
 
@@ -85,6 +105,18 @@ def apply_target_stats(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
 
     # Store x DayOfWeek
     df = df.merge(stats["store_dow"], on=["store_nbr", "_dow"], how="left")
+
+    # Store x Family recent
+    if "store_family_recent" in stats:
+        df = df.merge(stats["store_family_recent"], on=["store_nbr", "family"], how="left")
+
+    # Store x Family x DayOfWeek recent
+    if "store_family_dow_recent" in stats:
+        df = df.merge(stats["store_family_dow_recent"], on=["store_nbr", "family", "_dow"], how="left")
+
+    # Cluster x Family
+    if "cluster_family" in stats and "cluster" in df.columns:
+        df = df.merge(stats["cluster_family"], on=["cluster", "family"], how="left")
 
     df.drop(columns=["_dow"], inplace=True)
 

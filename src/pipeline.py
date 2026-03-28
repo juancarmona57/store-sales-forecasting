@@ -2,6 +2,7 @@
 
 Uses safe lags (>=16) that are always available during the 16-day test horizon.
 No iterative prediction needed — avoids error accumulation.
+Single LGBM Tweedie model — proven best performer.
 """
 
 import argparse
@@ -21,8 +22,6 @@ from src.features.target_stats import compute_target_stats
 from src.evaluation.metrics import rmsle
 from src.evaluation.validation import TimeSeriesSplitWithGap
 from src.models.lgbm_model import LGBMModel
-from src.models.xgb_model import XGBModel
-from src.models.ensemble import weighted_average_ensemble, optimize_weights
 from src.submission.generator import generate_submission
 
 logging.basicConfig(
@@ -47,7 +46,6 @@ def load_and_prepare_data():
         test_df["transactions"] = np.nan
 
     # Combine train + test for proper lag computation
-    # With safe lags (>=16), test rows get lags from training data directly
     combined = pd.concat([train_df, test_df], ignore_index=True)
     combined = combined.sort_values(["store_nbr", "family", "date"]).reset_index(drop=True)
 
@@ -62,6 +60,12 @@ def load_and_prepare_data():
     train_featured = train_featured.dropna(subset=[TARGET_COL]).reset_index(drop=True)
     test_featured = test_featured.reset_index(drop=True)
 
+    # Train on last 2 years only
+    cutoff_date = train_max_date - pd.Timedelta(days=730)
+    before = len(train_featured)
+    train_featured = train_featured[train_featured["date"] >= cutoff_date].reset_index(drop=True)
+    logger.info("Filtered to last 2 years: %d -> %d rows", before, len(train_featured))
+
     feature_cols = get_feature_columns(train_featured)
     logger.info("Features: %d train rows, %d test rows, %d cols",
                 len(train_featured), len(test_featured), len(feature_cols))
@@ -75,7 +79,7 @@ def load_and_prepare_data():
 
 
 def train_models(train_df, feature_cols):
-    """Train LightGBM and XGBoost."""
+    """Train LGBM Tweedie — proven best performer."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
     splitter = TimeSeriesSplitWithGap()
@@ -88,54 +92,24 @@ def train_models(train_df, feature_cols):
 
     logger.info("Train=%d  Val=%d", len(X_train), len(X_val))
 
-    models = {}
-    scores = {}
-    val_predictions = []
-
-    # LightGBM
-    logger.info("Training LightGBM...")
+    # LGBM Tweedie
+    logger.info("Training LGBM Tweedie...")
     t0 = time.time()
     lgbm = LGBMModel()
     lgbm.fit(X_train, y_train, X_val, y_val)
-    lgbm_preds = lgbm.predict(X_val)
-    lgbm_score = rmsle(y_val, lgbm_preds)
-    lgbm.save(MODELS_DIR / "lgbm_model.txt")
-    models["lgbm"] = lgbm
-    scores["lgbm"] = lgbm_score
-    val_predictions.append(lgbm_preds)
-    logger.info("LightGBM RMSLE: %.6f (%.1fs)", lgbm_score, time.time() - t0)
+    preds = lgbm.predict(X_val)
+    score = rmsle(y_val, preds)
+    lgbm.save(MODELS_DIR / "lgbm_tweedie.txt")
+    logger.info("LGBM Tweedie RMSLE: %.6f (%.1fs)", score, time.time() - t0)
 
-    # XGBoost
-    logger.info("Training XGBoost...")
-    t0 = time.time()
-    xgb_model = XGBModel()
-    xgb_model.fit(X_train, y_train, X_val, y_val)
-    xgb_preds = xgb_model.predict(X_val)
-    xgb_score = rmsle(y_val, xgb_preds)
-    xgb_model.save(MODELS_DIR / "xgb_model.json")
-    models["xgb"] = xgb_model
-    scores["xgb"] = xgb_score
-    val_predictions.append(xgb_preds)
-    logger.info("XGBoost RMSLE: %.6f (%.1fs)", xgb_score, time.time() - t0)
+    # Feature importance
+    importance = lgbm.model.feature_importances_
+    feat_imp = sorted(zip(feature_cols, importance), key=lambda x: x[1], reverse=True)
+    logger.info("Top 15 features:")
+    for fname, imp in feat_imp[:15]:
+        logger.info("  %s: %d", fname, imp)
 
-    # Optimize ensemble
-    logger.info("Optimizing ensemble weights...")
-    opt_weights = optimize_weights(val_predictions, y_val)
-    ensemble_preds = weighted_average_ensemble(val_predictions, opt_weights)
-    ensemble_score = rmsle(y_val, ensemble_preds)
-    scores["ensemble"] = ensemble_score
-
-    weights_path = MODELS_DIR / "weights.json"
-    with open(weights_path, "w") as f:
-        json.dump({"weights": opt_weights, "scores": scores}, f, indent=2)
-
-    logger.info("=" * 60)
-    for name, score in scores.items():
-        marker = " <-- BEST" if score == min(scores.values()) else ""
-        logger.info("  %-12s: %.6f%s", name, score, marker)
-    logger.info("=" * 60)
-
-    return models, opt_weights
+    return {"lgbm": lgbm}, [1.0]
 
 
 def generate_test_submission(models, weights, test_featured, feature_cols):
@@ -146,22 +120,17 @@ def generate_test_submission(models, weights, test_featured, feature_cols):
         if col not in test_featured.columns:
             test_featured[col] = 0
 
-    X_test = test_featured[feature_cols]
+    X_test = test_featured[feature_cols].copy()
     numeric_feat = [c for c in feature_cols if X_test[c].dtype.name != "category"]
     X_test[numeric_feat] = X_test[numeric_feat].fillna(0)
 
     logger.info("Generating predictions (%d rows)...", len(X_test))
-    predictions = []
-    for name in models:
-        preds = models[name].predict(X_test)
-        predictions.append(preds)
-        logger.info("  %s: mean=%.1f, median=%.1f", name, preds.mean(), np.median(preds))
+    preds = models["lgbm"].predict(X_test)
+    logger.info("Predictions: mean=%.1f, median=%.1f, min=%.1f, max=%.1f",
+                preds.mean(), np.median(preds), preds.min(), preds.max())
 
-    ensemble_preds = weighted_average_ensemble(predictions, weights)
-    logger.info("Ensemble: mean=%.1f, median=%.1f", ensemble_preds.mean(), np.median(ensemble_preds))
-
-    save_path = SUBMISSIONS_DIR / "submission_v10.csv"
-    submission = generate_submission(test_featured, ensemble_preds, save_path=save_path)
+    save_path = SUBMISSIONS_DIR / "submission_v14.csv"
+    submission = generate_submission(test_featured, preds, save_path=save_path)
     logger.info("Submission saved: %s (%d rows)", save_path, len(submission))
     return submission
 
